@@ -19,6 +19,7 @@
 static struct {
 	int valid;		/* is this entry valid: 1 = yes, 0 = no */
 	int pid;		/* process id (as provided by kernel) */
+    int startTime;
 } proctab[MAXPROCS];
 
 
@@ -72,6 +73,7 @@ int StartingProc (pid)
 		if (! proctab[i].valid) {
 			proctab[i].valid = 1;
 			proctab[i].pid = pid;
+            proctab[i].startTime = Gettime(); //Set up a timestamp to record a process starting time
 			return (1);
 		}
 	}
@@ -116,7 +118,7 @@ int SchedProc ()
 {
 	int i;
     int MinPid = 0;
-    int MaxPid = 0;
+    int timeComp = 0;
 
 	switch (GetSchedPolicy ()) {
 
@@ -152,23 +154,21 @@ int SchedProc ()
 		break;
 
 	case LIFO:
-            
             for (i = 0; i < MAXPROCS; i++) {
                 if (proctab[i].valid) {
-                    MaxPid = proctab[i].pid;
+                    timeComp = proctab[i].startTime;
                     break;
                 }
             }
             for ( ; i < MAXPROCS; i++) {
                 
-                if (proctab[i].valid && proctab[i].pid > MaxPid) {
-                    MaxPid = proctab[i].pid;
+                if (proctab[i].valid && proctab[i].startTime < timeComp) {
+                    timeComp = proctab[i].startTime;
                 }
             }
-            if (MaxPid) {
-                return MaxPid;
+            if (timeComp) {
+                return timeComp;
             }
-
 
 		/* your code here */
 
