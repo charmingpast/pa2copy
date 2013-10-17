@@ -11,15 +11,23 @@
 #include "sys.h"
 #include "mykernel2.h"
 
-#define TIMERINTERVAL 100000	/* in ticks (tick = 10 msec) */
+#define TIMERINTERVAL 1	/* in ticks (tick = 10 msec) */
 
 /*	A sample process table.  You may change this any way you wish.
  */
-
+static int proc_counter = 0;
+static int RR_counter = -1;
+static double cpu = 1.00;
 static struct {
 	int valid;		/* is this entry valid: 1 = yes, 0 = no */
 	int pid;		/* process id (as provided by kernel) */
-    int startTime;
+    int order;
+    double live_time;
+    double exe_time;
+    double utili;
+    double request;
+    int request_flag;
+    double ratio;
 } proctab[MAXPROCS];
 
 
@@ -45,12 +53,13 @@ void InitSched ()
 	 * called, thus leaving the policy to whatever we chose to test.
 	 */
 	if (GetSchedPolicy () == NOSCHEDPOLICY) {	/* leave as is */
-		SetSchedPolicy (LIFO);		/* set policy here */
+		SetSchedPolicy (PROPORTIONAL);		/* set policy here */
 	}
 		
 	/* Initialize all your data structures here */
 	for (i = 0; i < MAXPROCS; i++) {
 		proctab[i].valid = 0;
+
 	}
 
 	/* Set the timer last */
@@ -68,12 +77,22 @@ int StartingProc (pid)
 	int pid;
 {
 	int i;
-
 	for (i = 0; i < MAXPROCS; i++) {
 		if (! proctab[i].valid) {
 			proctab[i].valid = 1;
 			proctab[i].pid = pid;
-            proctab[i].startTime = Gettime(); //Set up a timestamp to record a process starting time
+            proctab[i].order = proc_counter++;
+            proctab[i].exe_time = 0.0;
+            proctab[i].live_time = 0.0;
+            proctab[i].utili = 0.0;
+            proctab[i].request = 0.0;
+            proctab[i].request_flag = 0;
+            proctab[i].ratio = 0.0;
+            unrequest_update();
+
+                               //Set up a timestamp to record a process starting time
+            if(GetSchedPolicy()==LIFO)
+                DoSched();
 			return (1);
 		}
 	}
@@ -98,6 +117,7 @@ int EndingProc (pid)
 	for (i = 0; i < MAXPROCS; i++) {
 		if (proctab[i].valid && proctab[i].pid == pid) {
 			proctab[i].valid = 0;
+            unrequest_update();
 			return (1);
 		}
 	}
@@ -117,9 +137,13 @@ int EndingProc (pid)
 int SchedProc ()
 {
 	int i;
-    int MinPid = 0;
-    int timeComp = 0;
+    int minOrder = 999999;
+    int MinPid = -1;
+    int count;
+    double miniRatio = 999999.00;
 
+
+    
 	switch (GetSchedPolicy ()) {
 
 	case ARBITRARY:
@@ -132,16 +156,11 @@ int SchedProc ()
 		break;
 
 	case FIFO:
-        
-            for (i = 0; i < MAXPROCS; i++) {
-                if (proctab[i].valid) {
-                    MinPid = proctab[i].pid;
-                    break;
-                }
-            }
-        for ( ; i < MAXPROCS; i++) {
+            MinPid = 0;
+        for (i = 0; i < MAXPROCS; i++) {
                 
-            if (proctab[i].valid && proctab[i].pid < MinPid) {
+            if (proctab[i].valid && proctab[i].order < minOrder) {
+                minOrder = proctab[i].order;
                 MinPid = proctab[i].pid;
             }
         }
@@ -154,35 +173,65 @@ int SchedProc ()
 		break;
 
 	case LIFO:
-            for (i = 0; i < MAXPROCS; i++) {
-                if (proctab[i].valid) {
-                    timeComp = proctab[i].startTime;
-                    break;
-                }
-            }
-            for ( ; i < MAXPROCS; i++) {
-                
-                if (proctab[i].valid && proctab[i].startTime < timeComp) {
-                    timeComp = proctab[i].startTime;
-                }
-            }
-            if (timeComp) {
-                return timeComp;
-            }
 
-		/* your code here */
+            for(i = MAXPROCS - 1; i >= 0; i--)
+            {
+                if(proctab[i].valid)
+                    return(proctab[i].pid);
+            }
+            break;		/* your code here */
 
-		break;
 
 	case ROUNDROBIN:
+            //Printf("Start Schedualing");
+            count = 0;
+            i = RR_counter;
+            while(1)
+            {
+                i = (i + 1) % MAXPROCS;
+                if(proctab[i].valid)
+                {
+                    RR_counter = i;
+                    return (proctab[i].pid);
+                }
+                count++;
+                if(count == MAXPROCS)
+                    return 0;
+            }
+            break;
 
-		/* your code here */
-
-		break;
 
 	case PROPORTIONAL:
-
-		/* your code here */
+            //Printf("proportional");
+            for (i = 0; i < MAXPROCS; i++) {
+               // Printf("1");
+                if (proctab[i].valid) {
+                    //Printf("2");
+                    proctab[i].live_time++;
+                    //Printf("3");
+                    proctab[i].utili = proctab[i].exe_time / proctab[i].live_time;
+                   // Printf("4");
+                    proctab[i].ratio = proctab[i].utili / proctab[i].request;
+//                    Printf("%f",proctab[i].ratio);
+//                    Printf("%f",proctab[i].exe_time);
+//                    Printf("%f",proctab[i].live_time);
+//                    Printf("%f",proctab[i].utili);
+//                    Printf("%f",proctab[i].request);
+                    if (proctab[i].ratio < miniRatio) {
+                     //   Printf("6");
+                        miniRatio = proctab[i].ratio;
+                        MinPid = i;
+//                        Printf("%f", miniRatio);
+//                        Printf("%d", MinPid);
+                    }
+                }
+            }
+            if (MinPid == -1) {
+                //Printf("4");
+                return 0;
+            }
+            proctab[MinPid].exe_time++;
+            return proctab[MinPid].pid;
 
 		break;
 
@@ -199,12 +248,12 @@ int SchedProc ()
 void HandleTimerIntr ()
 {
 	SetTimer (TIMERINTERVAL);
+    //Printf("in Hadel TimerIntr");
 
 	switch (GetSchedPolicy ()) {	/* is policy preemptive? */
 
-	case ROUNDROBIN:		/* ROUNDROBIN is preemptive */
+	case ROUNDROBIN:/* ROUNDROBIN is preemptive */
 	case PROPORTIONAL:		/* PROPORTIONAL is preemptive */
-
 		DoSched ();		/* make scheduling decision */
 		break;
 
@@ -231,7 +280,51 @@ int MyRequestCPUrate (pid, m, n)
 	int m;
 	int n;
 {
+   // Printf("in request");
+    int i;
+    if(m < 1 || n< 1 || m > n)
+        return -1;
+    
+    for(i = 0; i < MAXPROCS; i++)
+    {
+        if(proctab[i].valid && proctab[i].pid == pid){
+            break;
+        }
+    }
+    if(proctab[i].request_flag == 1){
+        cpu = proctab[i].request + cpu;
+    }
+    if(cpu < (double)m/(double)n-0.001)
+        return -1;
+    
+    proctab[i].request = (double)m / (double)n;
+    proctab[i].request_flag = 1;
+    cpu = cpu - proctab[i].request;
+    if(cpu < 0){
+        cpu = 0;
+    }
+    
+    unrequest_update();
 	/* your code here */
 
 	return (0);
+}
+int unrequest_update(){
+    int i;
+    int un_counter = 0;
+    //Printf("unquest update");
+    for (i = 0; i < MAXPROCS; i++) {
+        if (proctab[i].valid && proctab[i].request_flag == 0) {
+            un_counter++;
+        }
+    }
+//    Printf("%d", un_counter);
+//    Printf("%f",cpu);
+    for (i = 0; i < MAXPROCS; i++) {
+        if (proctab[i].valid && proctab[i].request_flag == 0) {
+            proctab[i].request = cpu / un_counter;
+        }
+    }
+    
+    return 0;
 }
